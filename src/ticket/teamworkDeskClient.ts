@@ -27,14 +27,30 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * Docs: https://apidocs.teamwork.com/docs/desk  (auth: Authorization: Bearer <apiKey>)
  */
 export class TeamworkDeskClient {
-  private readonly apiBase: string;
-  private readonly headers: Record<string, string>;
   private ticketTypeCache: TicketType[] | null = null;
 
-  constructor(private readonly desk: AppConfig['desk']) {
-    this.apiBase = `${desk.baseUrl}/desk/api/v2`;
-    this.headers = {
-      Authorization: `Bearer ${desk.apiKey}`,
+  constructor(private readonly desk: AppConfig['desk']) {}
+
+  /** True when the minimum Desk settings are present. */
+  isConfigured(): boolean {
+    return Boolean(this.desk.baseUrl && this.desk.apiKey && this.desk.inboxId !== undefined);
+  }
+
+  private ensureConfigured(): void {
+    if (!this.isConfigured()) {
+      throw new Error(
+        'Teamwork Desk is not configured. Set TEAMWORK_DESK_BASE_URL, TEAMWORK_DESK_API_KEY, and TEAMWORK_DESK_INBOX_ID.',
+      );
+    }
+  }
+
+  private get apiBase(): string {
+    return `${this.desk.baseUrl}/desk/api/v2`;
+  }
+
+  private get headers(): Record<string, string> {
+    return {
+      Authorization: `Bearer ${this.desk.apiKey}`,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     };
@@ -84,6 +100,7 @@ export class TeamworkDeskClient {
    *    name is preserved in the ticket body.
    */
   async createTicket(input: CreateTicketInput): Promise<CreatedTicket> {
+    this.ensureConfigured();
     const typeId = await this.resolveTicketTypeId(input.typeName);
 
     const clientIsEmail = EMAIL_RE.test(input.client.trim());
@@ -101,7 +118,7 @@ export class TeamworkDeskClient {
       : `Client: ${input.client}\n\n${input.body}`;
 
     const payload: Record<string, unknown> = {
-      inboxId: this.desk.inboxId,
+      inboxId: this.desk.inboxId!,
       subject: input.subject,
       // `message` is the body of the first ticket message.
       message,

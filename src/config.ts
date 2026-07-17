@@ -7,14 +7,6 @@ function optional(name: string): string | undefined {
   return value && value.trim() !== '' ? value.trim() : undefined;
 }
 
-function required(name: string): string {
-  const value = optional(name);
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-  return value;
-}
-
 function optionalNumber(name: string): number | undefined {
   const value = optional(name);
   if (value === undefined) return undefined;
@@ -34,9 +26,9 @@ export interface AppConfig {
     appTenantId?: string;
   };
   desk: {
-    baseUrl: string;
-    apiKey: string;
-    inboxId: number;
+    baseUrl?: string;
+    apiKey?: string;
+    inboxId?: number;
     defaultCustomerEmail?: string;
     defaultStatusId?: number;
     defaultPriorityId?: number;
@@ -44,20 +36,19 @@ export interface AppConfig {
 }
 
 /**
- * Loads and validates configuration from the environment.
- * Throws early (at startup) if anything required is missing.
+ * Loads configuration from the environment.
+ *
+ * Deliberately does NOT throw when Teamwork Desk / Bot settings are missing:
+ * the server still boots so the deployment succeeds and `/` and `/health`
+ * respond. Missing values are logged as warnings, and `createTicket` fails
+ * with a clear message if it is called before Desk is configured.
  */
 export function loadConfig(): AppConfig {
-  const inboxId = optionalNumber('TEAMWORK_DESK_INBOX_ID');
-  if (inboxId === undefined) {
-    throw new Error('Missing required environment variable: TEAMWORK_DESK_INBOX_ID');
-  }
-
   // Normalise the base URL: strip a trailing slash and any trailing /desk
-  const rawBaseUrl = required('TEAMWORK_DESK_BASE_URL').replace(/\/+$/, '');
-  const baseUrl = rawBaseUrl.replace(/\/desk$/i, '');
+  const rawBaseUrl = optional('TEAMWORK_DESK_BASE_URL')?.replace(/\/+$/, '');
+  const baseUrl = rawBaseUrl?.replace(/\/desk$/i, '');
 
-  return {
+  const config: AppConfig = {
     port: optionalNumber('PORT') ?? 3978,
     bot: {
       appId: optional('MICROSOFT_APP_ID') ?? '',
@@ -67,11 +58,32 @@ export function loadConfig(): AppConfig {
     },
     desk: {
       baseUrl,
-      apiKey: required('TEAMWORK_DESK_API_KEY'),
-      inboxId,
+      apiKey: optional('TEAMWORK_DESK_API_KEY'),
+      inboxId: optionalNumber('TEAMWORK_DESK_INBOX_ID'),
       defaultCustomerEmail: optional('DEFAULT_CUSTOMER_EMAIL'),
       defaultStatusId: optionalNumber('DEFAULT_STATUS_ID'),
       defaultPriorityId: optionalNumber('DEFAULT_PRIORITY_ID'),
     },
   };
+
+  const missing = missingSettings(config);
+  if (missing.length > 0) {
+    console.warn(
+      `[config] Server starting, but these settings are not set yet: ${missing.join(', ')}. ` +
+        `Ticket creation and/or Teams connectivity will not work until they are provided.`,
+    );
+  }
+
+  return config;
+}
+
+/** Returns the list of not-yet-configured settings (for warnings and /health). */
+export function missingSettings(config: AppConfig): string[] {
+  const missing: string[] = [];
+  if (!config.desk.baseUrl) missing.push('TEAMWORK_DESK_BASE_URL');
+  if (!config.desk.apiKey) missing.push('TEAMWORK_DESK_API_KEY');
+  if (config.desk.inboxId === undefined) missing.push('TEAMWORK_DESK_INBOX_ID');
+  if (!config.bot.appId) missing.push('MICROSOFT_APP_ID');
+  if (!config.bot.appPassword) missing.push('MICROSOFT_APP_PASSWORD');
+  return missing;
 }

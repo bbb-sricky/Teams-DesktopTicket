@@ -4,7 +4,7 @@ import {
   ConfigurationBotFrameworkAuthentication,
   type ConfigurationBotFrameworkAuthenticationOptions,
 } from 'botbuilder';
-import { loadConfig } from './config';
+import { loadConfig, missingSettings } from './config';
 import { TicketBot } from './bot/ticketBot';
 import { TeamworkDeskClient } from './ticket/teamworkDeskClient';
 
@@ -34,11 +34,24 @@ const app = express();
 app.use(express.json());
 
 app.get('/', (_req: Request, res: Response) => {
-  res.status(200).send('Teams Desktop-Ticket bot is running.');
+  const missing = missingSettings(config);
+  const configured = missing.length === 0;
+  res
+    .status(200)
+    .send(
+      `Teams Desktop-Ticket bot is running.\n` +
+        (configured
+          ? 'All required settings are configured. ✅'
+          : `Not yet configured. Missing settings: ${missing.join(', ')}`),
+    );
 });
 
 app.get('/health', (_req: Request, res: Response) => {
-  res.status(200).json({ status: 'ok' });
+  res.status(200).json({
+    status: 'ok',
+    deskConfigured: deskClient.isConfigured(),
+    missingSettings: missingSettings(config),
+  });
 });
 
 app.post('/api/messages', async (req: Request, res: Response) => {
