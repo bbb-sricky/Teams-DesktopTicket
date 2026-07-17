@@ -1,0 +1,47 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "0.1.0",
+  "id": "<<BOT_APP_ID>>",
+  "packageName": "com.bitxbit.teams.desktopticket",
+  "developer": {
+    "name": "BitXBit",
+    "websiteUrl": "https://www.bitxbit.com",
+    "privacyUrl": "https://www.bitxbit.com/privacy",
+    "termsOfUseUrl": "https://www.bitxbit.com/terms"
+  },
+  "name": {
+    "short": "Desktop-Ticket",
+    "full": "Desktop-Ticket (Teamwork Desk)"
+  },
+  "description": {
+    "short": "Create Teamwork Desk tickets from Teams chat.",
+    "full": "Type `add_ticket: client=...; type=...; summary=...; description=...` in a channel and this bot creates a Teamwork Desk ticket, then replies with the ticket number."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#2A6DF4",
+  "bots": [
+    {
+      "botId": "<<BOT_APP_ID>>",
+      "scopes": ["team", "groupChat", "personal"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["team", "groupChat", "personal"],
+          "commands": [
+            {
+              "title": "add_ticket",
+              "description": "add_ticket: client=<name/email>; type=<type>; summary=<title>; description=<details>"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}
