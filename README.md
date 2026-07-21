@@ -1,19 +1,27 @@
 # Desktop-Ticket — Teams → BBB Desktop
 
-A Microsoft Teams bot that creates a **BBB Desktop** ticket (via the
-`Desktop.Api` REST API) from a chat command and replies to the channel with the
-new ticket number. Defaults to the **staging** environment.
+A Microsoft Teams bot that creates a **BBB Desktop** ticket from a chat command
+and replies to the channel with the new ticket number. Targets the **staging**
+environment.
+
+Because the Desktop database is on a private network, the bot does **not** touch
+it directly. Instead a small endpoint (`CreateTicket.ashx`, see
+[`desktop-endpoint/`](desktop-endpoint/)) is deployed **inside** the Desktop app
+where the DB is reachable, and the bot calls it over HTTPS with an API key.
 
 **Phase 1 flow**
 
 ```
-Teams channel                     This bot (Azure Web App)          Desktop.Api (staging)
-─────────────                     ────────────────────────          ─────────────────────
-add_ticket: client=Acme;   ──▶   parse command                ──▶   POST /authenticate (JWT)
-  type=Helpdesk;                  resolve client + type         ──▶   GET  /GetClients, /GetTicketTypes
-  summary=...; description=...     create ticket                ──▶   POST /CreateTicket
-◀── "✅ Ticket #12345 created"    reply in same channel         ◀── { Id: 12345 }
+Teams channel                 Bot (Azure Web App)        CreateTicket.ashx (in Desktop app)   DB
+─────────────                 ───────────────────        ─────────────────────────────────   ──
+add_ticket: client=Acme;  ─▶  parse command         ─▶   verify X-Api-Key
+  type=Helpdesk;              POST JSON + X-Api-Key       resolve client + type            ─▶  insert
+  summary=...; description=…                               create ticket (CscDefectsEntity) ◀─  #12345
+◀── "✅ Ticket #12345 created"  reply in channel     ◀─   { TicketId: 12345 }
 ```
+
+The server-side endpoint is a separate, self-contained draft — see
+[`desktop-endpoint/README.md`](desktop-endpoint/README.md) for install steps.
 
 ## Command format
 
@@ -27,21 +35,19 @@ add_ticket: client=<company name>; type=<ticket type>; summary=<short title>; de
 - Keys accept `=` or `:`; pairs are separated by `;` or new lines.
 - Indonesian aliases work too: `klien`, `tipe`, `ringkasan`, `deskripsi`.
 
-Field mapping to Desktop.Api (`TicketCreateModel`):
+Field mapping (sent to `CreateTicket.ashx`):
 
-| Command field | Desktop.Api |
-|---------------|-------------|
-| `summary`     | `Summary` |
-| `description` | `Description` |
-| `client`      | resolved to `ClientId` via `GET /GetClients?search=` (exact name/code match, else the sole result; ambiguous names are rejected with suggestions) |
-| `type`        | resolved to `TicketTypeId` via `GET /GetTicketTypes?name=` |
+| Command field | Endpoint field | Notes |
+|---------------|----------------|-------|
+| `summary`     | `Summary`      | ticket summary |
+| `description` | `Description`  | ticket body |
+| `client`      | `Client`       | resolved to a `ClientId` **server-side**; ambiguous names come back as a `409` with candidate suggestions |
+| `type`        | `TicketType`   | resolved to a `TicketTypeId` server-side; falls back to a default |
 
 ## Tech stack
 
-- Node.js 18+ / TypeScript
-- [Bot Framework SDK](https://learn.microsoft.com/azure/bot-service/) (`botbuilder`, `CloudAdapter`)
-- Express HTTP server, messaging endpoint `POST /api/messages`
-- BBB Desktop.Api (JWT bearer; staging `https://desktop-api.bbbappdev.com`)
+- **Bot (this repo):** Node.js 18+ / TypeScript, [Bot Framework SDK](https://learn.microsoft.com/azure/bot-service/) (`botbuilder`, `CloudAdapter`), Express (`POST /api/messages`). Deployed to Azure App Service.
+- **Endpoint (`desktop-endpoint/`):** C# ASP.NET generic handler (`.ashx`) dropped into the existing Desktop app; reuses its LLBLGen ORM. Deployed to staging `desktop.bbbappdev.com`.
 
 ## Local development
 
@@ -71,16 +77,15 @@ pointed at `http://localhost:3978/api/messages`.
 | `MICROSOFT_APP_PASSWORD` | yes (in Teams) | client secret |
 | `MICROSOFT_APP_TYPE` | no | `MultiTenant` (default), `SingleTenant`, or `UserAssignedMSI` |
 | `MICROSOFT_APP_TENANT_ID` | if SingleTenant | Entra tenant id |
-| `EXTERNAL_API_USERNAME` | yes | Desktop.Api service-account username (e.g. `desktop-www`) |
-| `EXTERNAL_API_PASSWORD` | yes | Desktop.Api service-account password |
-| `DESKTOP_API_BASE_URL` | no | defaults to staging `https://desktop-api.bbbappdev.com`; set to `https://desktop-api.bitxbit.com` for production |
+| `DESKTOP_TICKET_API_URL` | yes | full URL of `CreateTicket.ashx` (e.g. `https://desktop.bbbappdev.com/api/CreateTicket.ashx`) |
+| `DESKTOP_TICKET_API_KEY` | yes | shared secret; must match `TeamsBot.ApiKey` in the Desktop app's Web.config |
 | `DESKTOP_TICKET_WEB_BASE_URL` | no | link base for the reply; defaults to staging `Detail2.aspx?Id=` |
 | `PORT` | no | defaults to `3978` |
 
 > The server boots even when settings are missing (so deploys succeed); `/` and
-> `/health` report what's still unset. Ticket creation needs the
-> `EXTERNAL_API_*` credentials; Teams connectivity needs the `MICROSOFT_APP_*`
-> values.
+> `/health` report what's still unset. Ticket creation needs
+> `DESKTOP_TICKET_API_URL` + `DESKTOP_TICKET_API_KEY`; Teams connectivity needs
+> the `MICROSOFT_APP_*` values.
 
 ## Deploy to Azure (recommended for phase 1)
 
@@ -120,9 +125,8 @@ az webapp config appsettings set -n app-desktopticket -g rg-desktopticket --sett
   MICROSOFT_APP_ID="<app-id>" \
   MICROSOFT_APP_PASSWORD="<secret>" \
   MICROSOFT_APP_TYPE="MultiTenant" \
-  EXTERNAL_API_USERNAME="<desktop-api-service-account>" \
-  EXTERNAL_API_PASSWORD="<desktop-api-password>" \
-  DESKTOP_API_BASE_URL="https://desktop-api.bbbappdev.com"
+  DESKTOP_TICKET_API_URL="https://desktop.bbbappdev.com/api/CreateTicket.ashx" \
+  DESKTOP_TICKET_API_KEY="<same-secret-as-Web.config-TeamsBot.ApiKey>"
 ```
 
 ### 4. Deploy the code
@@ -151,16 +155,15 @@ az webapp deploy -n app-desktopticket -g rg-desktopticket --src-path deploy.zip 
 
 ## Known limitations (phase 1)
 
-- `client` must resolve to a single Desktop client. An exact name/code match (or
-  a single search result) is used; an ambiguous name is rejected and the bot
-  replies with candidate names so the user can retry more specifically.
-- The ticket is created with only `Summary`, `Description`, `ClientId`, and
-  optional `TicketTypeId`. Contact, assignee, status, priority, and timesheet
-  entries are left to Desktop.Api defaults — wiring those into the command is a
-  planned enhancement.
+- `client` must resolve to a single Desktop client (server-side). An ambiguous
+  name is rejected and the bot replies with candidate names to retry with.
+- The ticket is created with `Summary`, `Description`, client, and ticket type.
+  Contact, assignee, status, and priority use the endpoint's configured defaults
+  (`TeamsBot.*` in Web.config) — wiring those into the command is a planned
+  enhancement.
 - The reply is posted to the same conversation where the command was issued, so
   run `add_ticket` inside the **Desktop-Ticket** channel. Proactive posting to a
   fixed channel from elsewhere can be added later via a stored conversation
   reference.
-- Defaults target the **staging** environment. Switch `DESKTOP_API_BASE_URL` and
-  `DESKTOP_TICKET_WEB_BASE_URL` to the production hosts when ready.
+- Targets the **staging** Desktop app. Point `DESKTOP_TICKET_API_URL` /
+  `DESKTOP_TICKET_WEB_BASE_URL` at production when ready.

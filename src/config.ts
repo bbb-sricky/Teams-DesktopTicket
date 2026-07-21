@@ -26,27 +26,25 @@ export interface AppConfig {
     appTenantId?: string;
   };
   api: {
-    /** Desktop.Api base URL (defaults to staging). */
-    baseUrl: string;
-    /** Service-account credentials for /authenticate. */
-    username?: string;
-    password?: string;
+    /** Full URL of the Desktop app's CreateTicket endpoint. */
+    url?: string;
+    /** Shared secret sent as the X-Api-Key header. */
+    apiKey?: string;
     /** Base URL used to build a human-clickable ticket link. */
     ticketWebBaseUrl: string;
   };
 }
 
-// Defaults point at the STAGING environment so we never touch production by accident.
-const DEFAULT_API_BASE_URL = 'https://desktop-api.bbbappdev.com';
+// Default link base points at STAGING so we never link into production by accident.
 const DEFAULT_TICKET_WEB_BASE_URL = 'https://desktop.bbbappdev.com/Ticket/Detail2.aspx?Id=';
 
 /**
  * Loads configuration from the environment.
  *
- * Deliberately does NOT throw when Desktop.Api / Bot settings are missing:
+ * Deliberately does NOT throw when endpoint / Bot settings are missing:
  * the server still boots so the deployment succeeds and `/` and `/health`
  * respond. Missing values are logged as warnings, and `createTicket` fails
- * with a clear message if it is called before the API is configured.
+ * with a clear message if it is called before the endpoint is configured.
  */
 export function loadConfig(): AppConfig {
   const config: AppConfig = {
@@ -58,9 +56,8 @@ export function loadConfig(): AppConfig {
       appTenantId: optional('MICROSOFT_APP_TENANT_ID'),
     },
     api: {
-      baseUrl: (optional('DESKTOP_API_BASE_URL') ?? DEFAULT_API_BASE_URL).replace(/\/+$/, ''),
-      username: optional('EXTERNAL_API_USERNAME'),
-      password: optional('EXTERNAL_API_PASSWORD'),
+      url: optional('DESKTOP_TICKET_API_URL'),
+      apiKey: optional('DESKTOP_TICKET_API_KEY'),
       ticketWebBaseUrl: optional('DESKTOP_TICKET_WEB_BASE_URL') ?? DEFAULT_TICKET_WEB_BASE_URL,
     },
   };
@@ -79,8 +76,8 @@ export function loadConfig(): AppConfig {
 /** Returns the list of not-yet-configured settings (for warnings and /health). */
 export function missingSettings(config: AppConfig): string[] {
   const missing: string[] = [];
-  if (!config.api.username) missing.push('EXTERNAL_API_USERNAME');
-  if (!config.api.password) missing.push('EXTERNAL_API_PASSWORD');
+  if (!config.api.url) missing.push('DESKTOP_TICKET_API_URL');
+  if (!config.api.apiKey) missing.push('DESKTOP_TICKET_API_KEY');
   if (!config.bot.appId) missing.push('MICROSOFT_APP_ID');
   if (!config.bot.appPassword) missing.push('MICROSOFT_APP_PASSWORD');
   return missing;

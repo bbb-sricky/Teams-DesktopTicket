@@ -3,7 +3,7 @@ import type { AppConfig } from '../config';
 export interface CreateTicketInput {
   summary: string;
   description: string;
-  /** Client value from the command — a company name (or ClientCode). */
+  /** Client value from the command — a company name (or code). */
   client: string;
   /** Ticket type name from the command, if provided. */
   typeName?: string;
@@ -14,23 +14,7 @@ export interface CreatedTicket {
   url: string;
 }
 
-interface AuthResponse {
-  Token?: string;
-  Expires?: string;
-}
-
-interface ClientRecord {
-  ClientId: number;
-  ClientName: string;
-  ClientCode?: string;
-}
-
-interface TicketTypeRecord {
-  TicketTypeId: number;
-  Name: string;
-}
-
-/** Raised when a client name cannot be resolved to a single ClientId. */
+/** Raised when the endpoint reports the client name is missing/ambiguous. */
 export class ClientResolutionError extends Error {
   constructor(message: string, readonly candidates: string[] = []) {
     super(message);
@@ -39,161 +23,77 @@ export class ClientResolutionError extends Error {
 }
 
 /**
- * Client for the BBB Desktop.Api (ticketing/PSA).
+ * Calls the BBB Desktop app's `CreateTicket.ashx` endpoint (see
+ * `desktop-endpoint/`), which runs inside the network and creates the ticket
+ * via the same ORM logic as the Add Ticket page.
  *
- * Docs: bundled skill `bbb-desktop-api`.
- *  - Auth: POST /authenticate { UserName, Password } -> { Token, Expires }
- *  - Create: POST /CreateTicket { Summary, Description, ClientId, TicketTypeId? }
- *  - Lookups: GET /GetClients?search=, GET /GetTicketTypes?name=
+ * Contract:
+ *   POST <url>   header X-Api-Key: <key>
+ *   body: { Client, TicketType, Summary, Description }
+ *   200 -> { TicketId }
+ *   409 -> { Error, Candidates: [...] }   (ambiguous client)
+ *   4xx -> { Error }
  */
 export class DesktopApiClient {
-  private token: string | null = null;
-  private tokenExpiresAt = 0; // epoch ms
-
   constructor(private readonly api: AppConfig['api']) {}
 
-  /** True when credentials are present (base URL always has a default). */
+  /** True when the endpoint URL and API key are both set. */
   isConfigured(): boolean {
-    return Boolean(this.api.baseUrl && this.api.username && this.api.password);
+    return Boolean(this.api.url && this.api.apiKey);
   }
 
   private ensureConfigured(): void {
     if (!this.isConfigured()) {
       throw new Error(
-        'Desktop.Api is not configured. Set EXTERNAL_API_USERNAME and EXTERNAL_API_PASSWORD.',
+        'Desktop ticket endpoint is not configured. Set DESKTOP_TICKET_API_URL and DESKTOP_TICKET_API_KEY.',
       );
     }
   }
 
-  /** Returns a valid bearer token, authenticating (or refreshing) as needed. */
-  private async getToken(force = false): Promise<string> {
-    const now = Date.now();
-    // Refresh a minute before expiry to avoid edge races.
-    if (!force && this.token && now < this.tokenExpiresAt - 60_000) {
-      return this.token;
-    }
-
-    const res = await fetch(`${this.api.baseUrl}/authenticate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ UserName: this.api.username, Password: this.api.password }),
-    });
-
-    const text = await res.text();
-    if (!res.ok) {
-      throw new Error(
-        `Desktop.Api authentication failed: ${res.status} ${res.statusText} — ${text.slice(0, 300)}`,
-      );
-    }
-
-    const data = JSON.parse(text) as AuthResponse;
-    if (!data.Token) {
-      throw new Error('Desktop.Api authentication succeeded but no token was returned.');
-    }
-    this.token = data.Token;
-    // Expires is ~7 days out; fall back to 6 days if unparseable.
-    const expiresMs = data.Expires ? Date.parse(data.Expires) : NaN;
-    this.tokenExpiresAt = Number.isNaN(expiresMs) ? now + 6 * 24 * 60 * 60 * 1000 : expiresMs;
-    return this.token;
-  }
-
-  /**
-   * Performs an authenticated request, re-authenticating exactly once on 401.
-   */
-  private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown,
-    _retriedAuth = false,
-  ): Promise<T> {
-    const token = await this.getToken();
-    const res = await fetch(`${this.api.baseUrl}${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: '*/*',
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-
-    if (res.status === 401 && !_retriedAuth) {
-      await this.getToken(true); // force re-auth once
-      return this.request<T>(method, path, body, true);
-    }
-
-    const text = await res.text();
-    if (!res.ok) {
-      throw new Error(
-        `Desktop.Api ${method} ${path} failed: ${res.status} ${res.statusText} — ${text.slice(0, 300)}`,
-      );
-    }
-    return (text ? JSON.parse(text) : null) as T;
-  }
-
-  /** Resolves a company name (or code) to a single ClientId. */
-  async resolveClientId(client: string): Promise<number> {
-    const term = client.trim();
-    const results =
-      (await this.request<ClientRecord[]>('GET', `/GetClients?search=${encodeURIComponent(term)}`)) ??
-      [];
-
-    if (results.length === 0) {
-      throw new ClientResolutionError(`No client found matching "${term}".`);
-    }
-
-    const lower = term.toLowerCase();
-    const exact = results.find(
-      (c) =>
-        c.ClientName?.trim().toLowerCase() === lower ||
-        c.ClientCode?.trim().toLowerCase() === lower,
-    );
-    if (exact) return exact.ClientId;
-
-    if (results.length === 1) return results[0].ClientId;
-
-    // Ambiguous: ask the user to be more specific.
-    const candidates = results.slice(0, 5).map((c) => c.ClientName).filter(Boolean);
-    throw new ClientResolutionError(
-      `"${term}" matches multiple clients. Please be more specific.`,
-      candidates,
-    );
-  }
-
-  /** Resolves a ticket-type name (case-insensitive) to its id, or undefined. */
-  async resolveTicketTypeId(typeName?: string): Promise<number | undefined> {
-    if (!typeName) return undefined;
-    const wanted = typeName.trim().toLowerCase();
-    const results =
-      (await this.request<TicketTypeRecord[]>(
-        'GET',
-        `/GetTicketTypes?name=${encodeURIComponent(typeName.trim())}`,
-      )) ?? [];
-    return results.find((t) => t.Name?.trim().toLowerCase() === wanted)?.TicketTypeId;
-  }
-
-  /** Creates a ticket and returns its id and a web URL. */
   async createTicket(input: CreateTicketInput): Promise<CreatedTicket> {
     this.ensureConfigured();
 
-    const clientId = await this.resolveClientId(input.client);
-    const ticketTypeId = await this.resolveTicketTypeId(input.typeName);
+    const res = await fetch(this.api.url!, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'X-Api-Key': this.api.apiKey!,
+      },
+      body: JSON.stringify({
+        Client: input.client,
+        TicketType: input.typeName ?? '',
+        Summary: input.summary,
+        Description: input.description,
+      }),
+    });
 
-    const payload: Record<string, unknown> = {
-      Summary: input.summary,
-      Description: input.description,
-      ClientId: clientId,
-      InternalOnly: false,
-    };
-    if (ticketTypeId !== undefined) payload.TicketTypeId = ticketTypeId;
-
-    const data = await this.request<Record<string, unknown>>('POST', '/CreateTicket', payload);
-
-    const id = Number(data?.Id ?? data?.TicketId ?? data?.id);
-    if (!id || Number.isNaN(id)) {
-      throw new Error('Ticket was created but no id was returned by Desktop.Api.');
+    const text = await res.text();
+    let data: Record<string, unknown> = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        /* non-JSON error page (e.g. IIS/WAF) — fall through to status handling */
+      }
     }
 
-    return { id, url: `${this.api.ticketWebBaseUrl}${id}` };
+    if (res.ok) {
+      const id = Number(data.TicketId ?? data.Id ?? data.id);
+      if (!id || Number.isNaN(id)) {
+        throw new Error('Endpoint returned success but no TicketId.');
+      }
+      return { id, url: `${this.api.ticketWebBaseUrl}${id}` };
+    }
+
+    const errorMsg = typeof data.Error === 'string' ? data.Error : `${res.status} ${res.statusText}`;
+
+    // Ambiguous / unresolved client → surface as a friendly, actionable error.
+    if (res.status === 409 || res.status === 404) {
+      const candidates = Array.isArray(data.Candidates) ? (data.Candidates as string[]) : [];
+      throw new ClientResolutionError(errorMsg, candidates);
+    }
+
+    throw new Error(`Desktop ticket endpoint failed: ${errorMsg}`);
   }
 }
