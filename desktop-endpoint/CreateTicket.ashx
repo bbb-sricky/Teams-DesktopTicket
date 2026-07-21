@@ -57,6 +57,9 @@ public class CreateTicketHandler : IHttpHandler
     public void ProcessRequest(HttpContext ctx)
     {
         ctx.Response.ContentType = "application/json";
+        // Stop IIS from replacing our JSON error bodies with its generic error page,
+        // so the bot can read our {Error}/{Candidates} payloads on 4xx/5xx.
+        ctx.Response.TrySkipIisCustomErrors = true;
 
         try
         {
