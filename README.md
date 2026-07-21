@@ -1,17 +1,18 @@
-# Desktop-Ticket — Teams → Teamwork Desk
+# Desktop-Ticket — Teams → BBB Desktop
 
-A Microsoft Teams bot that creates a **Teamwork Desk** ticket from a chat
-command and replies to the channel with the new ticket number.
+A Microsoft Teams bot that creates a **BBB Desktop** ticket (via the
+`Desktop.Api` REST API) from a chat command and replies to the channel with the
+new ticket number. Defaults to the **staging** environment.
 
 **Phase 1 flow**
 
 ```
-Teams channel                     This bot (Azure Web App)          Teamwork Desk
-─────────────                     ────────────────────────          ─────────────
-add_ticket: client=Acme;   ──▶   parse command                ──▶   POST /desk/api/v2/tickets.json
-  type=Bug; summary=...;          create ticket via REST
-  description=...                 ◀── ticket #12345 ────────────────
-◀── "✅ Ticket #12345 created"    reply in same channel
+Teams channel                     This bot (Azure Web App)          Desktop.Api (staging)
+─────────────                     ────────────────────────          ─────────────────────
+add_ticket: client=Acme;   ──▶   parse command                ──▶   POST /authenticate (JWT)
+  type=Helpdesk;                  resolve client + type         ──▶   GET  /GetClients, /GetTicketTypes
+  summary=...; description=...     create ticket                ──▶   POST /CreateTicket
+◀── "✅ Ticket #12345 created"    reply in same channel         ◀── { Id: 12345 }
 ```
 
 ## Command format
@@ -19,28 +20,28 @@ add_ticket: client=Acme;   ──▶   parse command                ──▶   
 Type this in the **Desktop-Ticket** channel (mention the bot if required by your channel):
 
 ```
-add_ticket: client=<name or email>; type=<ticket type>; summary=<short title>; description=<details>
+add_ticket: client=<company name>; type=<ticket type>; summary=<short title>; description=<details>
 ```
 
 - `client`, `summary`, `description` are **required**; `type` is optional.
 - Keys accept `=` or `:`; pairs are separated by `;` or new lines.
 - Indonesian aliases work too: `klien`, `tipe`, `ringkasan`, `deskripsi`.
 
-Field mapping to Teamwork Desk:
+Field mapping to Desktop.Api (`TicketCreateModel`):
 
-| Command field | Teamwork Desk |
-|---------------|---------------|
-| `summary`     | ticket subject |
-| `description` | first message / body |
-| `type`        | ticket type (matched by name → `typeId`) |
-| `client`      | if an email → the ticket customer; otherwise the configured `DEFAULT_CUSTOMER_EMAIL` is used and the client name is preserved in the body |
+| Command field | Desktop.Api |
+|---------------|-------------|
+| `summary`     | `Summary` |
+| `description` | `Description` |
+| `client`      | resolved to `ClientId` via `GET /GetClients?search=` (exact name/code match, else the sole result; ambiguous names are rejected with suggestions) |
+| `type`        | resolved to `TicketTypeId` via `GET /GetTicketTypes?name=` |
 
 ## Tech stack
 
 - Node.js 18+ / TypeScript
 - [Bot Framework SDK](https://learn.microsoft.com/azure/bot-service/) (`botbuilder`, `CloudAdapter`)
 - Express HTTP server, messaging endpoint `POST /api/messages`
-- Teamwork Desk REST API v2 (Bearer API key)
+- BBB Desktop.Api (JWT bearer; staging `https://desktop-api.bbbappdev.com`)
 
 ## Local development
 
@@ -70,16 +71,16 @@ pointed at `http://localhost:3978/api/messages`.
 | `MICROSOFT_APP_PASSWORD` | yes (in Teams) | client secret |
 | `MICROSOFT_APP_TYPE` | no | `MultiTenant` (default), `SingleTenant`, or `UserAssignedMSI` |
 | `MICROSOFT_APP_TENANT_ID` | if SingleTenant | Entra tenant id |
-| `TEAMWORK_DESK_BASE_URL` | yes | e.g. `https://yourcompany.teamwork.com` |
-| `TEAMWORK_DESK_API_KEY` | yes | Desk → avatar → View Profile → API Keys |
-| `TEAMWORK_DESK_INBOX_ID` | yes | target inbox id |
-| `DEFAULT_CUSTOMER_EMAIL` | recommended | used when `client` is not an email |
-| `DEFAULT_STATUS_ID` | no | leave blank for Desk default |
-| `DEFAULT_PRIORITY_ID` | no | leave blank for Desk default |
+| `EXTERNAL_API_USERNAME` | yes | Desktop.Api service-account username (e.g. `desktop-www`) |
+| `EXTERNAL_API_PASSWORD` | yes | Desktop.Api service-account password |
+| `DESKTOP_API_BASE_URL` | no | defaults to staging `https://desktop-api.bbbappdev.com`; set to `https://desktop-api.bitxbit.com` for production |
+| `DESKTOP_TICKET_WEB_BASE_URL` | no | link base for the reply; defaults to staging `Detail2.aspx?Id=` |
 | `PORT` | no | defaults to `3978` |
 
-> The Bot Framework variables are only needed when connected to Teams/Azure.
-> `TEAMWORK_DESK_*` are always required because config is validated at startup.
+> The server boots even when settings are missing (so deploys succeed); `/` and
+> `/health` report what's still unset. Ticket creation needs the
+> `EXTERNAL_API_*` credentials; Teams connectivity needs the `MICROSOFT_APP_*`
+> values.
 
 ## Deploy to Azure (recommended for phase 1)
 
@@ -119,10 +120,9 @@ az webapp config appsettings set -n app-desktopticket -g rg-desktopticket --sett
   MICROSOFT_APP_ID="<app-id>" \
   MICROSOFT_APP_PASSWORD="<secret>" \
   MICROSOFT_APP_TYPE="MultiTenant" \
-  TEAMWORK_DESK_BASE_URL="https://yourcompany.teamwork.com" \
-  TEAMWORK_DESK_API_KEY="<desk-api-key>" \
-  TEAMWORK_DESK_INBOX_ID="<inbox-id>" \
-  DEFAULT_CUSTOMER_EMAIL="helpdesk@yourcompany.com"
+  EXTERNAL_API_USERNAME="<desktop-api-service-account>" \
+  EXTERNAL_API_PASSWORD="<desktop-api-password>" \
+  DESKTOP_API_BASE_URL="https://desktop-api.bbbappdev.com"
 ```
 
 ### 4. Deploy the code
@@ -151,10 +151,16 @@ az webapp deploy -n app-desktopticket -g rg-desktopticket --src-path deploy.zip 
 
 ## Known limitations (phase 1)
 
-- A non-email `client` is stored as text in the ticket body and mapped to the
-  default customer. Mapping a client name to a specific Desk company/customer is
-  a planned enhancement.
+- `client` must resolve to a single Desktop client. An exact name/code match (or
+  a single search result) is used; an ambiguous name is rejected and the bot
+  replies with candidate names so the user can retry more specifically.
+- The ticket is created with only `Summary`, `Description`, `ClientId`, and
+  optional `TicketTypeId`. Contact, assignee, status, priority, and timesheet
+  entries are left to Desktop.Api defaults — wiring those into the command is a
+  planned enhancement.
 - The reply is posted to the same conversation where the command was issued, so
   run `add_ticket` inside the **Desktop-Ticket** channel. Proactive posting to a
   fixed channel from elsewhere can be added later via a stored conversation
   reference.
+- Defaults target the **staging** environment. Switch `DESKTOP_API_BASE_URL` and
+  `DESKTOP_TICKET_WEB_BASE_URL` to the production hosts when ready.

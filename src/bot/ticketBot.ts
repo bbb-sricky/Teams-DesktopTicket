@@ -4,14 +4,14 @@ import {
   parseAddTicketCommand,
   usageHelp,
 } from '../ticket/parser';
-import type { TeamworkDeskClient } from '../ticket/teamworkDeskClient';
+import { ClientResolutionError, DesktopApiClient } from '../ticket/desktopApiClient';
 
 /**
- * Teams bot that turns an `add_ticket` chat command into a Teamwork Desk ticket
+ * Teams bot that turns an `add_ticket` chat command into a BBB Desktop ticket
  * and replies with the ticket number in the same channel.
  */
 export class TicketBot extends TeamsActivityHandler {
-  constructor(private readonly desk: TeamworkDeskClient) {
+  constructor(private readonly api: DesktopApiClient) {
     super();
 
     this.onMessage(async (context, next) => {
@@ -56,9 +56,9 @@ export class TicketBot extends TeamsActivityHandler {
     const { client, type, summary, description } = parsed.command;
 
     try {
-      const ticket = await this.desk.createTicket({
-        subject: summary,
-        body: description,
+      const ticket = await this.api.createTicket({
+        summary,
+        description,
         client,
         typeName: type,
       });
@@ -75,6 +75,14 @@ export class TicketBot extends TeamsActivityHandler {
           .join('\n'),
       );
     } catch (err) {
+      if (err instanceof ClientResolutionError) {
+        const hint =
+          err.candidates.length > 0
+            ? `\n\nDid you mean: ${err.candidates.join(', ')}?`
+            : '';
+        await context.sendActivity(`⚠️ ${err.message}${hint}`);
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
       console.error('Failed to create ticket:', message);
       await context.sendActivity(

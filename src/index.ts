@@ -6,7 +6,7 @@ import {
 } from 'botbuilder';
 import { loadConfig, missingSettings } from './config';
 import { TicketBot } from './bot/ticketBot';
-import { TeamworkDeskClient } from './ticket/teamworkDeskClient';
+import { DesktopApiClient } from './ticket/desktopApiClient';
 
 const config = loadConfig();
 
@@ -25,9 +25,9 @@ adapter.onTurnError = async (context, error) => {
   await context.sendActivity('The bot hit an unexpected error. Please try again.');
 };
 
-// ─── Bot + Teamwork Desk client ──────────────────────────────────────────
-const deskClient = new TeamworkDeskClient(config.desk);
-const bot = new TicketBot(deskClient);
+// ─── Bot + Desktop.Api client ────────────────────────────────────────────
+const apiClient = new DesktopApiClient(config.api);
+const bot = new TicketBot(apiClient);
 
 // ─── HTTP server ─────────────────────────────────────────────────────────
 const app = express();
@@ -49,7 +49,7 @@ app.get('/', (_req: Request, res: Response) => {
 app.get('/health', (_req: Request, res: Response) => {
   res.status(200).json({
     status: 'ok',
-    deskConfigured: deskClient.isConfigured(),
+    apiConfigured: apiClient.isConfigured(),
     missingSettings: missingSettings(config),
   });
 });

@@ -25,29 +25,30 @@ export interface AppConfig {
     appType: string;
     appTenantId?: string;
   };
-  desk: {
-    baseUrl?: string;
-    apiKey?: string;
-    inboxId?: number;
-    defaultCustomerEmail?: string;
-    defaultStatusId?: number;
-    defaultPriorityId?: number;
+  api: {
+    /** Desktop.Api base URL (defaults to staging). */
+    baseUrl: string;
+    /** Service-account credentials for /authenticate. */
+    username?: string;
+    password?: string;
+    /** Base URL used to build a human-clickable ticket link. */
+    ticketWebBaseUrl: string;
   };
 }
+
+// Defaults point at the STAGING environment so we never touch production by accident.
+const DEFAULT_API_BASE_URL = 'https://desktop-api.bbbappdev.com';
+const DEFAULT_TICKET_WEB_BASE_URL = 'https://desktop.bbbappdev.com/Ticket/Detail2.aspx?Id=';
 
 /**
  * Loads configuration from the environment.
  *
- * Deliberately does NOT throw when Teamwork Desk / Bot settings are missing:
+ * Deliberately does NOT throw when Desktop.Api / Bot settings are missing:
  * the server still boots so the deployment succeeds and `/` and `/health`
  * respond. Missing values are logged as warnings, and `createTicket` fails
- * with a clear message if it is called before Desk is configured.
+ * with a clear message if it is called before the API is configured.
  */
 export function loadConfig(): AppConfig {
-  // Normalise the base URL: strip a trailing slash and any trailing /desk
-  const rawBaseUrl = optional('TEAMWORK_DESK_BASE_URL')?.replace(/\/+$/, '');
-  const baseUrl = rawBaseUrl?.replace(/\/desk$/i, '');
-
   const config: AppConfig = {
     port: optionalNumber('PORT') ?? 3978,
     bot: {
@@ -56,13 +57,11 @@ export function loadConfig(): AppConfig {
       appType: optional('MICROSOFT_APP_TYPE') ?? 'MultiTenant',
       appTenantId: optional('MICROSOFT_APP_TENANT_ID'),
     },
-    desk: {
-      baseUrl,
-      apiKey: optional('TEAMWORK_DESK_API_KEY'),
-      inboxId: optionalNumber('TEAMWORK_DESK_INBOX_ID'),
-      defaultCustomerEmail: optional('DEFAULT_CUSTOMER_EMAIL'),
-      defaultStatusId: optionalNumber('DEFAULT_STATUS_ID'),
-      defaultPriorityId: optionalNumber('DEFAULT_PRIORITY_ID'),
+    api: {
+      baseUrl: (optional('DESKTOP_API_BASE_URL') ?? DEFAULT_API_BASE_URL).replace(/\/+$/, ''),
+      username: optional('EXTERNAL_API_USERNAME'),
+      password: optional('EXTERNAL_API_PASSWORD'),
+      ticketWebBaseUrl: optional('DESKTOP_TICKET_WEB_BASE_URL') ?? DEFAULT_TICKET_WEB_BASE_URL,
     },
   };
 
@@ -80,9 +79,8 @@ export function loadConfig(): AppConfig {
 /** Returns the list of not-yet-configured settings (for warnings and /health). */
 export function missingSettings(config: AppConfig): string[] {
   const missing: string[] = [];
-  if (!config.desk.baseUrl) missing.push('TEAMWORK_DESK_BASE_URL');
-  if (!config.desk.apiKey) missing.push('TEAMWORK_DESK_API_KEY');
-  if (config.desk.inboxId === undefined) missing.push('TEAMWORK_DESK_INBOX_ID');
+  if (!config.api.username) missing.push('EXTERNAL_API_USERNAME');
+  if (!config.api.password) missing.push('EXTERNAL_API_PASSWORD');
   if (!config.bot.appId) missing.push('MICROSOFT_APP_ID');
   if (!config.bot.appPassword) missing.push('MICROSOFT_APP_PASSWORD');
   return missing;
