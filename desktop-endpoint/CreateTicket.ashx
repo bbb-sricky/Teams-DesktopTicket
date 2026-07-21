@@ -149,7 +149,8 @@ public class CreateTicketHandler : IHttpHandler
             try
             {
                 bool extOk = true, intOk = true;
-                int? extMsgId = null, intMsgId = null, historyId = 0;
+                int? extMsgId = null, intMsgId = null;
+                int historyId = 0; // argument 14 is a ref int (entity id)
                 int historyTypeId = DesktopShared.Ticket.History.Type.Id.UpdateByEmployee;
                 DesktopShared.Ticket.History.Add(
                     ticketId, serviceUserId, "Ticket Added: Teams", "", true,
@@ -221,7 +222,10 @@ public class CreateTicketHandler : IHttpHandler
             types.GetMulti(null);
             var match = types.FirstOrDefault(t =>
                 string.Equals((t.Name ?? "").Trim(), typeName.Trim(), StringComparison.OrdinalIgnoreCase));
-            return match != null ? match.PticketType : fallback; // TODO: PK property name
+            // Read the PK generically so we don't depend on its property name.
+            return match != null
+                ? Convert.ToInt32(match.Fields.PrimaryKeyFields[0].CurrentValue)
+                : fallback;
             // ------------------------------------------------------------
         }
         catch { return fallback; }
