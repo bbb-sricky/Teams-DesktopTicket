@@ -77,7 +77,6 @@ public class DesktopLookupsHandler : IHttpHandler
 
     private const int MaxRows = 25;
     private static object Item(int id, string name) { return new { id = id, name = (name ?? "").Trim() }; }
-    private static int Pk(IEntity e) { return Convert.ToInt32(e.Fields.PrimaryKeyFields[0].CurrentValue); }
 
     // ── clients (PROVEN pattern) ─────────────────────────────────────────
     private List<object> Clients(string search)
@@ -115,25 +114,23 @@ public class DesktopLookupsHandler : IHttpHandler
         return list;
     }
 
-    // ── employees / assignable techs (TODO: verify entity + fields) ───────
+    // ── employees / assignable techs (same source as the AssignTo dropdown) ──
+    // GetAssignToActiveEmployees() DataTable has Pusers + FullName; Add2 uses
+    // the Pusers value as the ticket's Assignedto.
     private List<object> Employees(string search)
     {
-        // TODO: verify collection name (EmployeeCollection?), name fields
-        //       (First/Last? Name?), and PK. Filter by the search term.
-        var col = new DesktopShared.CollectionClasses.EmployeeCollection();
-        IPredicateExpression filter = new PredicateExpression();
-        if (search.Length > 0)
+        var list = new List<object>();
+        System.Data.DataTable dt = DesktopShared.Employee.GetAssignToActiveEmployees();
+        if (dt == null) return list;
+        string s = (search ?? "").Trim().ToLowerInvariant();
+        foreach (System.Data.DataRow r in dt.Rows)
         {
-            var f = DesktopShared.HelperClasses.EmployeeFields;
-            filter.Add(f.First % ("%" + search + "%") | f.Last % ("%" + search + "%"));
+            string full = Convert.ToString(r["FullName"]) ?? "";
+            if (s.Length > 0 && full.ToLowerInvariant().IndexOf(s) < 0) continue;
+            list.Add(Item(Convert.ToInt32(r["Pusers"]), full));
+            if (list.Count >= MaxRows) break;
         }
-        col.GetMulti(filter);
-        return col.Cast<IEntity>()
-                  .Select(e => Item(Pk(e),
-                      (((e.Fields["First"] != null ? e.Fields["First"].CurrentValue : "") + " " +
-                        (e.Fields["Last"] != null ? e.Fields["Last"].CurrentValue : "")).ToString()).Trim()))
-                  .Take(MaxRows)
-                  .ToList();
+        return list;
     }
 
     // ── ticket categories for a client (same stored proc as the dropdown) ──
@@ -156,16 +153,13 @@ public class DesktopLookupsHandler : IHttpHandler
         return list;
     }
 
-    // ── priorities (TODO: verify entity + fields) ─────────────────────────
+    // ── priorities (same source as the TicketPriority dropdown) ──────────
     private List<object> Priorities()
     {
-        // TODO: verify collection (PriorityCollection? TicketPriorityCollection?)
-        //       and the display field (Name?).
-        var col = new DesktopShared.CollectionClasses.PriorityCollection();
-        col.GetMulti(null);
-        return col.Cast<IEntity>()
-                  .Select(e => Item(Pk(e), (string)e.Fields["Name"].CurrentValue))
-                  .ToList();
+        var list = new List<object>();
+        foreach (DesktopShared.EntityClasses.CscFieldsEntity p in DesktopShared.Ticket.CscField.GetPriorities())
+            list.Add(Item(p.Pcscfields, p.AlternateDisplayText));
+        return list;
     }
 
     private static int ParseInt(string s) { int v; return int.TryParse(s, out v) ? v : 0; }
