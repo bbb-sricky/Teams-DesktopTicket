@@ -77,8 +77,6 @@ public class DesktopLookupsHandler : IHttpHandler
 
     private const int MaxRows = 25;
     private static object Item(int id, string name) { return new { id = id, name = (name ?? "").Trim() }; }
-    private static int Pk(IEntity2 e) { return Convert.ToInt32(e.Fields.PrimaryKeyFields[0].CurrentValue); }
-    // SelfServicing entities implement IEntity (not IEntity2); overload for that:
     private static int Pk(IEntity e) { return Convert.ToInt32(e.Fields.PrimaryKeyFields[0].CurrentValue); }
 
     // ── clients (PROVEN pattern) ─────────────────────────────────────────
@@ -96,31 +94,25 @@ public class DesktopLookupsHandler : IHttpHandler
                   .ToList();
     }
 
-    // ── ticket types (PROVEN pattern) ────────────────────────────────────
+    // ── ticket types (from the same helper the dropdown uses) ────────────
     private List<object> TicketTypes()
     {
-        var col = new DesktopShared.CollectionClasses.TicketTypeCollection();
-        col.GetMulti(null);
-        return col.Cast<IEntity>()
-                  .Select(e => Item(Pk(e), (string)e.Fields["Name"].CurrentValue))
-                  .OrderBy(x => 0) // keep API order
-                  .ToList();
+        var list = new List<object>();
+        foreach (DesktopShared.EntityClasses.TicketTypeEntity t in DesktopShared.Ticket.TypeHelper.Get(null))
+            list.Add(Item(t.Id, t.Name));
+        return list;
     }
 
-    // ── contacts of a client (fairly confident) ──────────────────────────
-    // ClientContactEntity: PclientContact (PK), First, Last, FkClient  (seen in Add2.aspx.cs)
+    // ── contacts of a client (same source as the ClientContact dropdown) ──
     private List<object> Contacts(int clientId)
     {
-        if (clientId <= 0) return new List<object>();
-        var col = new DesktopShared.CollectionClasses.ClientContactCollection();
-        var filter = new PredicateExpression(
-            DesktopShared.HelperClasses.ClientContactFields.FkClient == clientId);
-        col.GetMulti(filter);
-        return col.Cast<DesktopShared.EntityClasses.ClientContactEntity>()
-                  .Select(c => Item(c.PclientContact, (c.First + " " + c.Last).Trim()))
-                  .OrderBy(x => x == null ? "" : ((dynamic)x).name)
-                  .Take(200)
-                  .ToList();
+        var list = new List<object>();
+        if (clientId <= 0) return list;
+        System.Data.DataTable dt = DesktopShared.Client.GetActiveContacts(clientId, "");
+        if (dt == null) return list;
+        foreach (System.Data.DataRow r in dt.Rows)
+            list.Add(Item(Convert.ToInt32(r["PclientContact"]), Convert.ToString(r["FullName"])));
+        return list;
     }
 
     // ── employees / assignable techs (TODO: verify entity + fields) ───────
@@ -144,17 +136,24 @@ public class DesktopLookupsHandler : IHttpHandler
                   .ToList();
     }
 
-    // ── ticket categories for a client (TODO: verify entity + fields) ─────
+    // ── ticket categories for a client (same stored proc as the dropdown) ──
     private List<object> Categories(int clientId)
     {
-        // TODO: verify collection (TicketCategoryCollection?), Name field, and
-        //       how it filters by client (FkClient? or a helper). Mirror
-        //       ddlTicketCategory.PopulateDropDownList(clientId) from Add2.aspx.cs.
-        var col = new DesktopShared.CollectionClasses.TicketCategoryCollection();
-        col.GetMulti(null);
-        return col.Cast<IEntity>()
-                  .Select(e => Item(Pk(e), (string)e.Fields["Name"].CurrentValue))
-                  .ToList();
+        var list = new List<object>();
+        string cs = ConfigurationManager.AppSettings["ConnectionString.SQL Server (SqlClient)"];
+        using (var conn = new System.Data.SqlClient.SqlConnection(cs))
+        {
+            var dt = new System.Data.DataTable();
+            using (var adp = new System.Data.SqlClient.SqlDataAdapter("proc_GetDefaultTicketCategory", conn))
+            {
+                adp.SelectCommand.CommandType = System.Data.CommandType.StoredProcedure;
+                adp.SelectCommand.Parameters.AddWithValue("@clientid", clientId > 0 ? (object)clientId : DBNull.Value);
+                adp.Fill(dt);
+            }
+            foreach (System.Data.DataRow r in dt.Rows)
+                list.Add(Item(Convert.ToInt32(r["Id"]), Convert.ToString(r["CategoryName"])));
+        }
+        return list;
     }
 
     // ── priorities (TODO: verify entity + fields) ─────────────────────────
