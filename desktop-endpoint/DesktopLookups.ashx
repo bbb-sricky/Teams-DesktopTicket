@@ -93,11 +93,12 @@ public class DesktopLookupsHandler : IHttpHandler
                   .ToList();
     }
 
-    // ── ticket types (from the same helper the dropdown uses) ────────────
+    // ── ticket types (active only) ───────────────────────────────────────
     private List<object> TicketTypes()
     {
         var list = new List<object>();
-        foreach (DesktopShared.EntityClasses.TicketTypeEntity t in DesktopShared.Ticket.TypeHelper.Get(null))
+        // Get(true) = active ticket types only (Get(null) would return all).
+        foreach (DesktopShared.EntityClasses.TicketTypeEntity t in DesktopShared.Ticket.TypeHelper.Get(true))
             list.Add(Item(t.Id, t.Name));
         return list;
     }
