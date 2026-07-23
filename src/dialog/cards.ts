@@ -52,10 +52,11 @@ export function choiceCard(opts: {
   includeNone?: boolean;
   searchAgainAction?: string;
 }): Attachment {
-  const choices = opts.options.map((o) => ({ title: o.name, value: String(o.id) }));
-  // Use "0" (not "") for the none option — an empty choice value makes the
-  // Adaptive Card ChoiceSet fail to render in Web Chat/Teams.
-  if (opts.includeNone) choices.unshift({ title: '(none)', value: '0' });
+  // Encode "id|name" in the value so the picked name survives even if the
+  // bot's in-memory state is lost between turns. (Empty value "" breaks the
+  // Adaptive Card ChoiceSet render, so the none option uses "0|".)
+  const choices = opts.options.map((o) => ({ title: o.name, value: `${o.id}|${o.name}` }));
+  if (opts.includeNone) choices.unshift({ title: '(none)', value: '0|' });
 
   const body: unknown[] = [heading(opts.title)];
   if (opts.subtitle) body.push({ type: 'TextBlock', text: opts.subtitle, isSubtle: true, wrap: true });

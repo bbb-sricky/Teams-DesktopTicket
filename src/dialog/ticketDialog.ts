@@ -26,7 +26,7 @@ export class TicketDialog {
 
     if (isCancel(text) || value?.action === 'cancel') {
       Object.assign(state, initialState());
-      await context.sendActivity('❌ Ticket dibatalkan.');
+      await context.sendActivity('❌ Ticket cancelled.');
       return true;
     }
 
@@ -63,7 +63,7 @@ export class TicketDialog {
       if (isStartCommand(text)) return await this.start(context, state);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      await context.sendActivity(`⚠️ Terjadi kesalahan: ${msg}\nKetik \`add_ticket\` untuk mulai lagi, atau \`cancel\`.`);
+      await context.sendActivity(`⚠️ Something went wrong: ${msg}\nType \`add_ticket\` to start again, or \`cancel\`.`);
       return true;
     }
 
@@ -74,12 +74,20 @@ export class TicketDialog {
     return context.sendActivity({ attachments: [attachment] });
   }
 
-  private resolve(choices: LookupOption[], idStr: unknown): { id?: number; name?: string } {
-    const s = idStr === undefined || idStr === null ? '' : String(idStr);
-    // "" and "0" are the "(none)" sentinels.
-    if (s === '' || s === '0') return { id: undefined, name: '(none)' };
-    const found = choices.find((c) => String(c.id) === s);
-    return { id: Number(s), name: found?.name ?? s };
+  /**
+   * Parses a pick value. Choice values are "id|name" so the name survives even
+   * if in-memory state was lost; "0|" / "" mean the "(none)" option.
+   */
+  private resolve(choices: LookupOption[], raw: unknown): { id?: number; name?: string } {
+    const s = raw === undefined || raw === null ? '' : String(raw);
+    if (s === '') return { id: undefined, name: '(none)' };
+    const sep = s.indexOf('|');
+    const idStr = sep >= 0 ? s.slice(0, sep) : s;
+    const namePart = sep >= 0 ? s.slice(sep + 1) : '';
+    if (idStr === '0' || idStr === '') return { id: undefined, name: namePart || '(none)' };
+    const id = Number(idStr);
+    const name = namePart || choices.find((c) => String(c.id) === idStr)?.name || idStr;
+    return { id: Number.isNaN(id) ? undefined : id, name };
   }
 
   // ─── Steps ───────────────────────────────────────────────────────────
@@ -91,10 +99,10 @@ export class TicketDialog {
       context,
       textPromptCard({
         title: 'Add Ticket — Client',
-        subtitle: 'Ketik sebagian nama client, lalu Next.',
+        subtitle: 'Type part of the client name, then Search.',
         inputId: 'clientSearch',
         action: 'clientSearch',
-        placeholder: 'mis. Bit By Bit',
+        placeholder: 'e.g. Bit By Bit',
         submitLabel: 'Search',
       }),
     );
@@ -108,10 +116,10 @@ export class TicketDialog {
         context,
         textPromptCard({
           title: 'Add Ticket — Client',
-          subtitle: `Tidak ada client cocok dengan "${term}". Coba lagi.`,
+          subtitle: `No clients match "${term}". Try again.`,
           inputId: 'clientSearch',
           action: 'clientSearch',
-          placeholder: 'mis. Bit By Bit',
+          placeholder: 'e.g. Bit By Bit',
           submitLabel: 'Search',
         }),
       );
@@ -122,7 +130,7 @@ export class TicketDialog {
     await this.send(
       context,
       choiceCard({
-        title: 'Pilih Client',
+        title: 'Select Client',
         inputId: 'clientId',
         action: 'clientPick',
         options: results,
@@ -139,10 +147,10 @@ export class TicketDialog {
         context,
         textPromptCard({
           title: 'Assigned To',
-          subtitle: `Tidak ada yang cocok dengan "${term}". Coba lagi.`,
+          subtitle: `Nobody matches "${term}". Try again.`,
           inputId: 'assignedSearch',
           action: 'assignedSearch',
-          placeholder: 'nama teknisi',
+          placeholder: 'technician name',
           submitLabel: 'Search',
         }),
       );
@@ -153,7 +161,7 @@ export class TicketDialog {
     await this.send(
       context,
       choiceCard({
-        title: 'Pilih Assigned To',
+        title: 'Select Assigned To',
         inputId: 'assignedToId',
         action: 'assignedPick',
         options: results,
@@ -169,10 +177,10 @@ export class TicketDialog {
       context,
       textPromptCard({
         title: 'Description',
-        subtitle: 'Tulis deskripsi tiket.',
+        subtitle: 'Enter the ticket description.',
         inputId: 'description',
         action: 'description',
-        placeholder: 'Deskripsi lengkap...',
+        placeholder: 'Full description...',
         multiline: true,
       }),
     );
@@ -188,7 +196,7 @@ export class TicketDialog {
   private async finish(context: TurnContext, state: DialogState): Promise<boolean> {
     const d = state.data;
     if (!d.summary || !d.description || d.clientId === undefined) {
-      await context.sendActivity('⚠️ Data belum lengkap. Ketik `add_ticket` untuk mulai lagi.');
+      await context.sendActivity('⚠️ Incomplete data. Type `add_ticket` to start again.');
       Object.assign(state, initialState());
       return true;
     }
@@ -219,7 +227,7 @@ export class TicketDialog {
         await context.sendActivity(`⚠️ ${err.message}`);
       } else {
         const msg = err instanceof Error ? err.message : String(err);
-        await context.sendActivity(`❌ Gagal membuat tiket. ${msg}`);
+        await context.sendActivity(`❌ Failed to create the ticket. ${msg}`);
       }
     }
     Object.assign(state, initialState());
@@ -238,7 +246,7 @@ export class TicketDialog {
           context,
           textPromptCard({
             title: 'Add Ticket — Client',
-            subtitle: 'Ketik sebagian nama client.',
+            subtitle: 'Type part of the client name.',
             inputId: 'clientSearch',
             action: 'clientSearch',
             submitLabel: 'Search',
@@ -249,7 +257,7 @@ export class TicketDialog {
       case 'clientPick': {
         const { id, name } = this.resolve(state.choices, value.clientId);
         if (id === undefined) {
-          await context.sendActivity('⚠️ Pilih client dulu.');
+          await context.sendActivity('⚠️ Please select a client first.');
           return true;
         }
         state.data.clientId = id;
@@ -260,8 +268,8 @@ export class TicketDialog {
         await this.send(
           context,
           choiceCard({
-            title: 'Pilih Contact',
-            subtitle: contacts.length ? undefined : 'Tidak ada contact; pilih (none) untuk lanjut.',
+            title: 'Select Contact',
+            subtitle: contacts.length ? undefined : 'No contacts; choose (none) to continue.',
             inputId: 'contactId',
             action: 'contactPick',
             options: contacts,
@@ -280,7 +288,7 @@ export class TicketDialog {
         state.choices = types;
         await this.send(
           context,
-          choiceCard({ title: 'Pilih Ticket Type', inputId: 'typeId', action: 'typePick', options: types }),
+          choiceCard({ title: 'Select Ticket Type', inputId: 'typeId', action: 'typePick', options: types }),
         );
         return true;
       }
@@ -294,10 +302,10 @@ export class TicketDialog {
           context,
           textPromptCard({
             title: 'Assigned To',
-            subtitle: 'Ketik sebagian nama teknisi/employee.',
+            subtitle: 'Type part of the technician / employee name.',
             inputId: 'assignedSearch',
             action: 'assignedSearch',
-            placeholder: 'nama teknisi',
+            placeholder: 'technician name',
             submitLabel: 'Search',
           }),
         );
@@ -312,7 +320,7 @@ export class TicketDialog {
           context,
           textPromptCard({
             title: 'Assigned To',
-            subtitle: 'Ketik sebagian nama teknisi/employee.',
+            subtitle: 'Type part of the technician / employee name.',
             inputId: 'assignedSearch',
             action: 'assignedSearch',
             submitLabel: 'Search',
@@ -330,8 +338,8 @@ export class TicketDialog {
         await this.send(
           context,
           choiceCard({
-            title: 'Pilih Ticket Category',
-            subtitle: 'Opsional — boleh (none).',
+            title: 'Select Ticket Category',
+            subtitle: 'Optional — you may choose (none).',
             inputId: 'categoryId',
             action: 'categoryPick',
             options: categories,
@@ -351,8 +359,8 @@ export class TicketDialog {
         await this.send(
           context,
           choiceCard({
-            title: 'Pilih Ticket Priority',
-            subtitle: 'Opsional — boleh (none).',
+            title: 'Select Ticket Priority',
+            subtitle: 'Optional — you may choose (none).',
             inputId: 'priorityId',
             action: 'priorityPick',
             options: priorities,
@@ -371,10 +379,10 @@ export class TicketDialog {
           context,
           textPromptCard({
             title: 'Summary',
-            subtitle: 'Tulis ringkasan singkat tiket.',
+            subtitle: 'Enter a short ticket summary.',
             inputId: 'summary',
             action: 'summary',
-            placeholder: 'Ringkasan singkat',
+            placeholder: 'Short summary',
             multiline: true,
           }),
         );
@@ -384,7 +392,7 @@ export class TicketDialog {
       case 'summary': {
         const s = String(value.summary ?? '').trim();
         if (!s) {
-          await context.sendActivity('⚠️ Summary tidak boleh kosong.');
+          await context.sendActivity('⚠️ Summary cannot be empty.');
           return true;
         }
         state.data.summary = s;
@@ -394,7 +402,7 @@ export class TicketDialog {
       case 'description': {
         const s = String(value.description ?? '').trim();
         if (!s) {
-          await context.sendActivity('⚠️ Description tidak boleh kosong.');
+          await context.sendActivity('⚠️ Description cannot be empty.');
           return true;
         }
         state.data.description = s;

@@ -40,7 +40,7 @@ export class TicketBot extends TeamsActivityHandler {
       const selfId = context.activity.recipient?.id;
       if (added.some((m) => m.id !== selfId)) {
         await context.sendActivity(
-          `👋 Desktop-Ticket bot siap.\n\nKetik \`add_ticket\` untuk mulai membuat tiket langkah demi langkah.`,
+          `👋 Desktop-Ticket bot is ready.\n\nType \`add_ticket\` to create a ticket step by step.`,
         );
       }
       await next();
@@ -82,11 +82,11 @@ export class TicketBot extends TeamsActivityHandler {
         );
       } catch (err) {
         if (err instanceof ClientResolutionError) {
-          const hint = err.candidates.length ? `\n\nMaksudmu: ${err.candidates.join(', ')}?` : '';
+          const hint = err.candidates.length ? `\n\nDid you mean: ${err.candidates.join(', ')}?` : '';
           await context.sendActivity(`⚠️ ${err.message}${hint}`);
         } else {
           const msg = err instanceof Error ? err.message : String(err);
-          await context.sendActivity(`❌ Gagal membuat tiket. ${msg}`);
+          await context.sendActivity(`❌ Failed to create the ticket. ${msg}`);
         }
       }
       return;
@@ -95,7 +95,7 @@ export class TicketBot extends TeamsActivityHandler {
     // Otherwise, offer help in 1:1 chats.
     if (text.length > 0 && context.activity.conversation?.conversationType === 'personal') {
       await context.sendActivity(
-        `Ketik \`add_ticket\` untuk membuat tiket langkah demi langkah.\n\n${usageHelp()}`,
+        `Type \`add_ticket\` to create a ticket step by step.\n\n${usageHelp()}`,
       );
     }
   }
