@@ -248,6 +248,7 @@ export class TicketDialog {
 
       case 'clientPick': {
         const { id, name } = this.resolve(state.choices, value.clientId);
+        await context.sendActivity(`🔎 (debug) clientPick diterima: clientId=${JSON.stringify(value.clientId)} → id=${id}, name=${name}`);
         if (id === undefined) {
           await context.sendActivity('⚠️ Pilih client dulu.');
           return true;
@@ -255,19 +256,26 @@ export class TicketDialog {
         state.data.clientId = id;
         state.data.clientName = name;
         const contacts = await this.api.getContacts(id);
+        await context.sendActivity(`🔎 (debug) getContacts(${id}) → ${contacts.length} contact. Mengirim kartu Contact...`);
         state.step = 'contact_pick';
         state.choices = contacts;
-        await this.send(
-          context,
-          choiceCard({
-            title: 'Pilih Contact',
-            subtitle: contacts.length ? undefined : 'Tidak ada contact; pilih (none) untuk lanjut.',
-            inputId: 'contactId',
-            action: 'contactPick',
-            options: contacts,
-            includeNone: true,
-          }),
-        );
+        try {
+          await this.send(
+            context,
+            choiceCard({
+              title: 'Pilih Contact',
+              subtitle: contacts.length ? undefined : 'Tidak ada contact; pilih (none) untuk lanjut.',
+              inputId: 'contactId',
+              action: 'contactPick',
+              options: contacts,
+              includeNone: true,
+            }),
+          );
+          await context.sendActivity('🔎 (debug) kartu Contact terkirim.');
+        } catch (e) {
+          const m = e instanceof Error ? e.message : String(e);
+          await context.sendActivity(`❌ (debug) gagal kirim kartu Contact: ${m}`);
+        }
         return true;
       }
 
