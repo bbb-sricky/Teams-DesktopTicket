@@ -142,8 +142,9 @@ public class CreateTicketHandler : IHttpHandler
 
             // ── create the ticket (mirrors Add2.aspx.cs btnSubmit_Click) ──
             int serviceUserId = GetConfigInt("TeamsBot.UserId", 0);
-            // Status/disposition is always "New" for bot-created tickets.
-            int dispositionId = DesktopShared.SiteHelper.Ticket.Dispostion.Id.New;
+            // Status/disposition is always "BBB New" for bot-created tickets —
+            // the same disposition Add2.aspx.cs defaults a new ticket to.
+            int dispositionId = GetConfigInt("TicketDisposition_BBBNewId", 99);
             int assignedTo = (req.AssignedToId.HasValue && req.AssignedToId.Value > 0)
                 ? req.AssignedToId.Value
                 : serviceUserId;
