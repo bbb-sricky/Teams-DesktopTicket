@@ -46,8 +46,17 @@ public class CreateTicketHandler : IHttpHandler
 {
     private class TicketRequest
     {
+        // Names (legacy one-liner path — resolved server-side):
         public string Client { get; set; }
         public string TicketType { get; set; }
+        // Resolved IDs (interactive flow path — preferred when present):
+        public int? ClientId { get; set; }
+        public int? ContactId { get; set; }
+        public int? TicketTypeId { get; set; }
+        public int? AssignedToId { get; set; }
+        public int? TicketCategoryId { get; set; }
+        public int? PriorityId { get; set; }
+        // Always required:
         public string Summary { get; set; }
         public string Description { get; set; }
     }
@@ -95,8 +104,9 @@ public class CreateTicketHandler : IHttpHandler
             req.Description = (req.Description ?? "").Trim();
             req.TicketType = (req.TicketType ?? "").Trim();
 
+            bool haveClientId = req.ClientId.HasValue && req.ClientId.Value > 0;
             var missing = new List<string>();
-            if (req.Client.Length == 0) missing.Add("Client");
+            if (!haveClientId && req.Client.Length == 0) missing.Add("Client");
             if (req.Summary.Length == 0) missing.Add("Summary");
             if (req.Description.Length == 0) missing.Add("Description");
             if (missing.Count > 0)
@@ -105,34 +115,68 @@ public class CreateTicketHandler : IHttpHandler
                 return;
             }
 
-            // ── resolve client ───────────────────────────────────────
-            List<string> candidates;
-            int? clientId = ResolveClientId(req.Client, out candidates);
-            if (clientId == null)
+            // ── resolve client (prefer explicit id from the interactive flow) ──
+            int? clientId;
+            if (haveClientId)
             {
-                if (candidates != null && candidates.Count > 1)
-                    FailWithCandidates(ctx, 409, "\"" + req.Client + "\" matches multiple clients. Be more specific.", candidates);
-                else
-                    Fail(ctx, 404, "No client found matching \"" + req.Client + "\".");
-                return;
+                clientId = req.ClientId.Value;
+            }
+            else
+            {
+                List<string> candidates;
+                clientId = ResolveClientId(req.Client, out candidates);
+                if (clientId == null)
+                {
+                    if (candidates != null && candidates.Count > 1)
+                        FailWithCandidates(ctx, 409, "\"" + req.Client + "\" matches multiple clients. Be more specific.", candidates);
+                    else
+                        Fail(ctx, 404, "No client found matching \"" + req.Client + "\".");
+                    return;
+                }
             }
 
-            // ── resolve ticket type (optional) ───────────────────────
-            int ticketTypeId = ResolveTicketTypeId(req.TicketType);
+            // ── resolve ticket type (explicit id wins, else by name, else default) ──
+            int ticketTypeId = (req.TicketTypeId.HasValue && req.TicketTypeId.Value > 0)
+                ? req.TicketTypeId.Value
+                : ResolveTicketTypeId(req.TicketType);
 
             // ── create the ticket (mirrors Add2.aspx.cs btnSubmit_Click) ──
             int serviceUserId = GetConfigInt("TeamsBot.UserId", 0);
             int dispositionId = GetConfigInt("TeamsBot.DispositionId", 99);
+            int assignedTo = (req.AssignedToId.HasValue && req.AssignedToId.Value > 0)
+                ? req.AssignedToId.Value
+                : serviceUserId;
 
             var ticket = new DesktopShared.EntityClasses.CscDefectsEntity();
             ticket.InternalOnly = false;
             ticket.Summary = req.Summary;
             ticket.Description = HttpUtility.HtmlEncode(req.Description);
-            ticket.Assignedto = serviceUserId;
+            ticket.Assignedto = assignedTo;
             ticket.FkDisposition = dispositionId;
             ticket.FkStatus = dispositionId == 93 ? 77 : 76;
             ticket.FkClient = clientId;
             ticket.TicketTypeId = ticketTypeId;
+            if (req.TicketCategoryId.HasValue && req.TicketCategoryId.Value > 0)
+                ticket.TicketCategoryId = req.TicketCategoryId.Value;
+            if (req.PriorityId.HasValue && req.PriorityId.Value > 0)
+                ticket.FkPriority = req.PriorityId.Value;
+
+            // ── contact / reporter (from the chosen client contact) ──
+            if (req.ContactId.HasValue && req.ContactId.Value > 0)
+            {
+                var cc = new DesktopShared.EntityClasses.ClientContactEntity(req.ContactId.Value);
+                if (cc.Fields.State == EntityState.Fetched)
+                {
+                    string full = (cc.First.Trim() + " " + cc.Last.Trim()).Trim();
+                    if (full.Length > 50) full = full.Substring(0, 50);
+                    ticket.ReportedByFirst = cc.First.Trim();
+                    ticket.ReportedByLast = cc.Last.Trim();
+                    ticket.Email = cc.Email.Trim();
+                    ticket.Phone = cc.Busphone.Trim();
+                    ticket.Reportedby = full;
+                    ticket.FkUser = DesktopShared.User.GetIdForClientContact(cc.PclientContact);
+                }
+            }
 
             // defaults copied from the Add Ticket page
             ticket.AllowAutoClose = "N";

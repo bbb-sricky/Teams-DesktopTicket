@@ -1,0 +1,410 @@
+import { TurnContext, type Attachment } from 'botbuilder';
+import {
+  ClientResolutionError,
+  DesktopApiClient,
+  type LookupOption,
+} from '../ticket/desktopApiClient';
+import { choiceCard, confirmCard, textPromptCard } from './cards';
+import { initialState, type DialogState } from './state';
+
+/** Matches a bare "add_ticket" (no key/value args) that starts the flow. */
+export function isStartCommand(text: string): boolean {
+  return /^add[_\s-]?ticket\s*$/i.test(text.trim());
+}
+
+function isCancel(text: string): boolean {
+  return /^(cancel|batal)\s*$/i.test(text.trim());
+}
+
+export class TicketDialog {
+  constructor(private readonly api: DesktopApiClient) {}
+
+  /** Returns true if this activity was consumed by the dialog. */
+  async handle(context: TurnContext, state: DialogState): Promise<boolean> {
+    const value = (context.activity.value ?? undefined) as Record<string, unknown> | undefined;
+    const text = (TurnContext.removeRecipientMention(context.activity) ?? '').trim();
+
+    if (isCancel(text) || value?.action === 'cancel') {
+      Object.assign(state, initialState());
+      await context.sendActivity('❌ Ticket dibatalkan.');
+      return true;
+    }
+
+    try {
+      if (value && typeof value.action === 'string') {
+        return await this.handleSubmit(context, state, value);
+      }
+
+      // Free-typed text while a step expects it.
+      switch (state.step) {
+        case 'client_search':
+          if (text) return await this.afterClientSearch(context, state, text);
+          break;
+        case 'assigned_search':
+          if (text) return await this.afterAssignedSearch(context, state, text);
+          break;
+        case 'summary':
+          if (text) {
+            state.data.summary = text;
+            return await this.gotoDescription(context, state);
+          }
+          break;
+        case 'description':
+          if (text) {
+            state.data.description = text;
+            return await this.gotoConfirm(context, state);
+          }
+          break;
+        case 'confirm':
+          if (/^confirm$/i.test(text)) return await this.finish(context, state);
+          break;
+      }
+
+      if (isStartCommand(text)) return await this.start(context, state);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await context.sendActivity(`⚠️ Terjadi kesalahan: ${msg}\nKetik \`add_ticket\` untuk mulai lagi, atau \`cancel\`.`);
+      return true;
+    }
+
+    return false;
+  }
+
+  private send(context: TurnContext, attachment: Attachment): Promise<unknown> {
+    return context.sendActivity({ attachments: [attachment] });
+  }
+
+  private resolve(choices: LookupOption[], idStr: unknown): { id?: number; name?: string } {
+    const s = idStr === undefined || idStr === null ? '' : String(idStr);
+    if (s === '') return { id: undefined, name: '(none)' };
+    const found = choices.find((c) => String(c.id) === s);
+    return { id: Number(s), name: found?.name ?? s };
+  }
+
+  // ─── Steps ───────────────────────────────────────────────────────────
+
+  private async start(context: TurnContext, state: DialogState): Promise<boolean> {
+    Object.assign(state, initialState());
+    state.step = 'client_search';
+    await this.send(
+      context,
+      textPromptCard({
+        title: 'Add Ticket — Client',
+        subtitle: 'Ketik sebagian nama client, lalu Next.',
+        inputId: 'clientSearch',
+        action: 'clientSearch',
+        placeholder: 'mis. Bit By Bit',
+        submitLabel: 'Search',
+      }),
+    );
+    return true;
+  }
+
+  private async afterClientSearch(context: TurnContext, state: DialogState, term: string): Promise<boolean> {
+    const results = await this.api.searchClients(term);
+    if (results.length === 0) {
+      await this.send(
+        context,
+        textPromptCard({
+          title: 'Add Ticket — Client',
+          subtitle: `Tidak ada client cocok dengan "${term}". Coba lagi.`,
+          inputId: 'clientSearch',
+          action: 'clientSearch',
+          placeholder: 'mis. Bit By Bit',
+          submitLabel: 'Search',
+        }),
+      );
+      return true;
+    }
+    state.step = 'client_pick';
+    state.choices = results;
+    await this.send(
+      context,
+      choiceCard({
+        title: 'Pilih Client',
+        inputId: 'clientId',
+        action: 'clientPick',
+        options: results,
+        searchAgainAction: 'clientSearchAgain',
+      }),
+    );
+    return true;
+  }
+
+  private async afterAssignedSearch(context: TurnContext, state: DialogState, term: string): Promise<boolean> {
+    const results = await this.api.searchEmployees(term);
+    if (results.length === 0) {
+      await this.send(
+        context,
+        textPromptCard({
+          title: 'Assigned To',
+          subtitle: `Tidak ada yang cocok dengan "${term}". Coba lagi.`,
+          inputId: 'assignedSearch',
+          action: 'assignedSearch',
+          placeholder: 'nama teknisi',
+          submitLabel: 'Search',
+        }),
+      );
+      return true;
+    }
+    state.step = 'assigned_pick';
+    state.choices = results;
+    await this.send(
+      context,
+      choiceCard({
+        title: 'Pilih Assigned To',
+        inputId: 'assignedToId',
+        action: 'assignedPick',
+        options: results,
+        searchAgainAction: 'assignedSearchAgain',
+      }),
+    );
+    return true;
+  }
+
+  private async gotoDescription(context: TurnContext, state: DialogState): Promise<boolean> {
+    state.step = 'description';
+    await this.send(
+      context,
+      textPromptCard({
+        title: 'Description',
+        subtitle: 'Tulis deskripsi tiket.',
+        inputId: 'description',
+        action: 'description',
+        placeholder: 'Deskripsi lengkap...',
+        multiline: true,
+      }),
+    );
+    return true;
+  }
+
+  private async gotoConfirm(context: TurnContext, state: DialogState): Promise<boolean> {
+    state.step = 'confirm';
+    await this.send(context, confirmCard(state.data));
+    return true;
+  }
+
+  private async finish(context: TurnContext, state: DialogState): Promise<boolean> {
+    const d = state.data;
+    if (!d.summary || !d.description || d.clientId === undefined) {
+      await context.sendActivity('⚠️ Data belum lengkap. Ketik `add_ticket` untuk mulai lagi.');
+      Object.assign(state, initialState());
+      return true;
+    }
+    try {
+      const ticket = await this.api.createTicket({
+        clientId: d.clientId,
+        contactId: d.contactId,
+        typeId: d.typeId,
+        assignedToId: d.assignedToId,
+        categoryId: d.categoryId,
+        priorityId: d.priorityId,
+        summary: d.summary,
+        description: d.description,
+      });
+      await context.sendActivity(
+        [
+          `✅ **Ticket #${ticket.id} created**`,
+          `• **Client:** ${d.clientName}`,
+          d.typeName ? `• **Type:** ${d.typeName}` : undefined,
+          `• **Summary:** ${d.summary}`,
+          `• **Link:** ${ticket.url}`,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+    } catch (err) {
+      if (err instanceof ClientResolutionError) {
+        await context.sendActivity(`⚠️ ${err.message}`);
+      } else {
+        const msg = err instanceof Error ? err.message : String(err);
+        await context.sendActivity(`❌ Gagal membuat tiket. ${msg}`);
+      }
+    }
+    Object.assign(state, initialState());
+    return true;
+  }
+
+  // ─── Card submits ────────────────────────────────────────────────────
+
+  private async handleSubmit(context: TurnContext, state: DialogState, value: Record<string, unknown>): Promise<boolean> {
+    switch (value.action) {
+      case 'clientSearch':
+        return this.afterClientSearch(context, state, String(value.clientSearch ?? '').trim());
+      case 'clientSearchAgain':
+        state.step = 'client_search';
+        await this.send(
+          context,
+          textPromptCard({
+            title: 'Add Ticket — Client',
+            subtitle: 'Ketik sebagian nama client.',
+            inputId: 'clientSearch',
+            action: 'clientSearch',
+            submitLabel: 'Search',
+          }),
+        );
+        return true;
+
+      case 'clientPick': {
+        const { id, name } = this.resolve(state.choices, value.clientId);
+        if (id === undefined) {
+          await context.sendActivity('⚠️ Pilih client dulu.');
+          return true;
+        }
+        state.data.clientId = id;
+        state.data.clientName = name;
+        const contacts = await this.api.getContacts(id);
+        state.step = 'contact_pick';
+        state.choices = contacts;
+        await this.send(
+          context,
+          choiceCard({
+            title: 'Pilih Contact',
+            subtitle: contacts.length ? undefined : 'Tidak ada contact; pilih (none) untuk lanjut.',
+            inputId: 'contactId',
+            action: 'contactPick',
+            options: contacts,
+            includeNone: true,
+          }),
+        );
+        return true;
+      }
+
+      case 'contactPick': {
+        const { id, name } = this.resolve(state.choices, value.contactId);
+        state.data.contactId = id;
+        state.data.contactName = name;
+        const types = await this.api.getTicketTypes();
+        state.step = 'type_pick';
+        state.choices = types;
+        await this.send(
+          context,
+          choiceCard({ title: 'Pilih Ticket Type', inputId: 'typeId', action: 'typePick', options: types }),
+        );
+        return true;
+      }
+
+      case 'typePick': {
+        const { id, name } = this.resolve(state.choices, value.typeId);
+        state.data.typeId = id;
+        state.data.typeName = name;
+        state.step = 'assigned_search';
+        await this.send(
+          context,
+          textPromptCard({
+            title: 'Assigned To',
+            subtitle: 'Ketik sebagian nama teknisi/employee.',
+            inputId: 'assignedSearch',
+            action: 'assignedSearch',
+            placeholder: 'nama teknisi',
+            submitLabel: 'Search',
+          }),
+        );
+        return true;
+      }
+
+      case 'assignedSearch':
+        return this.afterAssignedSearch(context, state, String(value.assignedSearch ?? '').trim());
+      case 'assignedSearchAgain':
+        state.step = 'assigned_search';
+        await this.send(
+          context,
+          textPromptCard({
+            title: 'Assigned To',
+            subtitle: 'Ketik sebagian nama teknisi/employee.',
+            inputId: 'assignedSearch',
+            action: 'assignedSearch',
+            submitLabel: 'Search',
+          }),
+        );
+        return true;
+
+      case 'assignedPick': {
+        const { id, name } = this.resolve(state.choices, value.assignedToId);
+        state.data.assignedToId = id;
+        state.data.assignedToName = name;
+        const categories = state.data.clientId !== undefined ? await this.api.getCategories(state.data.clientId) : [];
+        state.step = 'category_pick';
+        state.choices = categories;
+        await this.send(
+          context,
+          choiceCard({
+            title: 'Pilih Ticket Category',
+            subtitle: 'Opsional — boleh (none).',
+            inputId: 'categoryId',
+            action: 'categoryPick',
+            options: categories,
+            includeNone: true,
+          }),
+        );
+        return true;
+      }
+
+      case 'categoryPick': {
+        const { id, name } = this.resolve(state.choices, value.categoryId);
+        state.data.categoryId = id;
+        state.data.categoryName = name;
+        const priorities = await this.api.getPriorities();
+        state.step = 'priority_pick';
+        state.choices = priorities;
+        await this.send(
+          context,
+          choiceCard({
+            title: 'Pilih Ticket Priority',
+            subtitle: 'Opsional — boleh (none).',
+            inputId: 'priorityId',
+            action: 'priorityPick',
+            options: priorities,
+            includeNone: true,
+          }),
+        );
+        return true;
+      }
+
+      case 'priorityPick': {
+        const { id, name } = this.resolve(state.choices, value.priorityId);
+        state.data.priorityId = id;
+        state.data.priorityName = name;
+        state.step = 'summary';
+        await this.send(
+          context,
+          textPromptCard({
+            title: 'Summary',
+            subtitle: 'Tulis ringkasan singkat tiket.',
+            inputId: 'summary',
+            action: 'summary',
+            placeholder: 'Ringkasan singkat',
+            multiline: true,
+          }),
+        );
+        return true;
+      }
+
+      case 'summary': {
+        const s = String(value.summary ?? '').trim();
+        if (!s) {
+          await context.sendActivity('⚠️ Summary tidak boleh kosong.');
+          return true;
+        }
+        state.data.summary = s;
+        return this.gotoDescription(context, state);
+      }
+
+      case 'description': {
+        const s = String(value.description ?? '').trim();
+        if (!s) {
+          await context.sendActivity('⚠️ Description tidak boleh kosong.');
+          return true;
+        }
+        state.data.description = s;
+        return this.gotoConfirm(context, state);
+      }
+
+      case 'confirm':
+        return this.finish(context, state);
+
+      default:
+        return false;
+    }
+  }
+}

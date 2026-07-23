@@ -28,6 +28,8 @@ export interface AppConfig {
   api: {
     /** Full URL of the Desktop app's CreateTicket endpoint. */
     url?: string;
+    /** Full URL of the Desktop app's DesktopLookups endpoint (lists). */
+    lookupUrl?: string;
     /** Shared secret sent as the X-Api-Key header. */
     apiKey?: string;
     /** Base URL used to build a human-clickable ticket link. */
@@ -57,6 +59,10 @@ export function loadConfig(): AppConfig {
     },
     api: {
       url: optional('DESKTOP_TICKET_API_URL'),
+      // Default the lookup URL by swapping the filename on the create URL.
+      lookupUrl:
+        optional('DESKTOP_LOOKUP_API_URL') ??
+        optional('DESKTOP_TICKET_API_URL')?.replace(/CreateTicket\.ashx/i, 'DesktopLookups.ashx'),
       apiKey: optional('DESKTOP_TICKET_API_KEY'),
       ticketWebBaseUrl: optional('DESKTOP_TICKET_WEB_BASE_URL') ?? DEFAULT_TICKET_WEB_BASE_URL,
     },

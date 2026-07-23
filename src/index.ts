@@ -2,6 +2,8 @@ import express, { type Request, type Response } from 'express';
 import {
   CloudAdapter,
   ConfigurationBotFrameworkAuthentication,
+  ConversationState,
+  MemoryStorage,
   type ConfigurationBotFrameworkAuthenticationOptions,
 } from 'botbuilder';
 import { loadConfig, missingSettings } from './config';
@@ -26,8 +28,11 @@ adapter.onTurnError = async (context, error) => {
 };
 
 // ─── Bot + Desktop.Api client ────────────────────────────────────────────
+// In-memory conversation state (per-conversation dialog progress). Resets on
+// restart — an in-progress flow would just be restarted with `add_ticket`.
+const conversationState = new ConversationState(new MemoryStorage());
 const apiClient = new DesktopApiClient(config.api);
-const bot = new TicketBot(apiClient);
+const bot = new TicketBot(apiClient, conversationState);
 
 // ─── HTTP server ─────────────────────────────────────────────────────────
 const app = express();
@@ -55,7 +60,11 @@ app.get('/health', (_req: Request, res: Response) => {
 });
 
 app.post('/api/messages', async (req: Request, res: Response) => {
-  await adapter.process(req, res, (context) => bot.run(context));
+  await adapter.process(req, res, async (context) => {
+    await bot.run(context);
+    // Persist dialog progress after each turn.
+    await conversationState.saveChanges(context, false);
+  });
 });
 
 app.listen(config.port, () => {

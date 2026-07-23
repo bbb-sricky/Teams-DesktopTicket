@@ -13,11 +13,21 @@ bot calls it over HTTPS.
 Teams → Bot (Azure) → HTTPS + X-Api-Key → CreateTicket.ashx (inside network) → DB → ticket #
 ```
 
+## Files
+
+- **`CreateTicket.ashx`** — creates a ticket (used by both the interactive flow
+  and the legacy one-liner).
+- **`DesktopLookups.ashx`** — read-only pick-lists for the interactive flow
+  (clients, contacts, ticket types, employees, categories, priorities). Some
+  lookups have `TODO:` markers to verify entity/field names against your LLBLGen
+  model (same iterate-by-compiler approach as CreateTicket).
+
 ## Install
 
-1. Copy `CreateTicket.ashx` into the Desktop web app, e.g. under an `/api/` folder:
-   `.../DesktopWeb/api/CreateTicket.ashx`
-   → URL becomes `https://desktop.bbbappdev.com/api/CreateTicket.ashx`
+1. Copy **both** `.ashx` files into the Desktop web app, e.g. under an `/api/`
+   folder: `.../DesktopWeb/api/CreateTicket.ashx` and `.../api/DesktopLookups.ashx`
+   → URLs become `https://desktop.bbbappdev.com/api/CreateTicket.ashx` and
+   `.../api/DesktopLookups.ashx`
 
 2. Add these to `<appSettings>` in the app's `Web.config`:
 
@@ -31,11 +41,26 @@ Teams → Bot (Azure) → HTTPS + X-Api-Key → CreateTicket.ashx (inside networ
    Generate a strong `TeamsBot.ApiKey` (e.g. a 32+ char random string). The Teams
    bot must send the **same** value in the `X-Api-Key` header.
 
-3. **Adjust the two `TODO:` lookups** in the handler (`ResolveClientId`,
-   `ResolveTicketTypeId`) to match your LLBLGen model — verify the collection
-   class names (`ClientCollection` / `TicketTypeCollection`), the search field
-   (`Company`), and the PK property names (`Pclient` / `PticketType`). If you
-   already have a client-search helper in `DesktopShared`, call that instead.
+3. The app uses Forms Authentication, so **allow anonymous access to both
+   endpoints** (our own `X-Api-Key` is the real gate). Add these as direct
+   children of `<configuration>` in `Web.config`:
+
+   ```xml
+   <location path="api/CreateTicket.ashx">
+     <system.web><authorization><allow users="*" /></authorization></system.web>
+   </location>
+   <location path="api/DesktopLookups.ashx">
+     <system.web><authorization><allow users="*" /></authorization></system.web>
+   </location>
+   ```
+
+4. **Adjust the `TODO:` lookups** to match your LLBLGen model:
+   - `CreateTicket.ashx`: `ResolveClientId`, `ResolveTicketTypeId` (client search
+     + ticket type). These are already confirmed working (`ClientCollection`,
+     `ClientFields.Company`, `Pclient`; ticket-type PK read generically).
+   - `DesktopLookups.ashx`: `Employees`, `Categories`, `Priorities` still need
+     their collection/field names verified (marked `TODO:`). `Clients`,
+     `TicketTypes`, and `Contacts` follow patterns already proven.
 
 ## Contract
 
