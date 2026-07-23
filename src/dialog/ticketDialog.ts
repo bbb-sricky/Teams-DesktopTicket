@@ -76,7 +76,8 @@ export class TicketDialog {
 
   private resolve(choices: LookupOption[], idStr: unknown): { id?: number; name?: string } {
     const s = idStr === undefined || idStr === null ? '' : String(idStr);
-    if (s === '') return { id: undefined, name: '(none)' };
+    // "" and "0" are the "(none)" sentinels.
+    if (s === '' || s === '0') return { id: undefined, name: '(none)' };
     const found = choices.find((c) => String(c.id) === s);
     return { id: Number(s), name: found?.name ?? s };
   }

@@ -53,7 +53,9 @@ export function choiceCard(opts: {
   searchAgainAction?: string;
 }): Attachment {
   const choices = opts.options.map((o) => ({ title: o.name, value: String(o.id) }));
-  if (opts.includeNone) choices.unshift({ title: '(none)', value: '' });
+  // Use "0" (not "") for the none option — an empty choice value makes the
+  // Adaptive Card ChoiceSet fail to render in Web Chat/Teams.
+  if (opts.includeNone) choices.unshift({ title: '(none)', value: '0' });
 
   const body: unknown[] = [heading(opts.title)];
   if (opts.subtitle) body.push({ type: 'TextBlock', text: opts.subtitle, isSubtle: true, wrap: true });
