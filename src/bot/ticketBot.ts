@@ -10,7 +10,7 @@ import {
   usageHelp,
 } from '../ticket/parser';
 import { ClientResolutionError, DesktopApiClient } from '../ticket/desktopApiClient';
-import { TicketDialog, isStartCommand } from '../dialog/ticketDialog';
+import { TicketDialog, isStartCommand, type TicketDialogOptions } from '../dialog/ticketDialog';
 import { initialState, type DialogState } from '../dialog/state';
 
 /**
@@ -25,9 +25,10 @@ export class TicketBot extends TeamsActivityHandler {
   constructor(
     private readonly api: DesktopApiClient,
     private readonly conversationState: ConversationState,
+    dialogOptions: TicketDialogOptions = {},
   ) {
     super();
-    this.dialog = new TicketDialog(api);
+    this.dialog = new TicketDialog(api, dialogOptions);
     this.dialogAccessor = conversationState.createProperty<DialogState>('ticketDialog');
 
     this.onMessage(async (context, next) => {

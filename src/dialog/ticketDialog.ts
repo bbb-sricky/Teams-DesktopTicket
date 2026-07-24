@@ -1,4 +1,4 @@
-import { TurnContext, type Attachment } from 'botbuilder';
+import { MessageFactory, TeamsInfo, TurnContext, type Activity, type Attachment } from 'botbuilder';
 import {
   ClientResolutionError,
   DesktopApiClient,
@@ -6,6 +6,13 @@ import {
 } from '../ticket/desktopApiClient';
 import { choiceCard, confirmCard, textPromptCard } from './cards';
 import { initialState, type DialogState } from './state';
+
+export interface TicketDialogOptions {
+  /** Teams channel id to also post created-ticket confirmations to. */
+  ticketChannelId?: string;
+  /** Bot's Microsoft App ID (needed for proactive channel posts). */
+  botAppId?: string;
+}
 
 /** Matches a bare "add_ticket" (no key/value args) that starts the flow. */
 export function isStartCommand(text: string): boolean {
@@ -17,7 +24,10 @@ function isCancel(text: string): boolean {
 }
 
 export class TicketDialog {
-  constructor(private readonly api: DesktopApiClient) {}
+  constructor(
+    private readonly api: DesktopApiClient,
+    private readonly opts: TicketDialogOptions = {},
+  ) {}
 
   /** Returns true if this activity was consumed by the dialog. */
   async handle(context: TurnContext, state: DialogState): Promise<boolean> {
@@ -211,16 +221,43 @@ export class TicketDialog {
         summary: d.summary,
         description: d.description,
       });
+
+      const notNone = (s?: string) => (s && s !== '(none)' ? s : undefined);
+      const summaryText = [
+        `✅ **Ticket #${ticket.id} created**`,
+        `• **Client:** ${d.clientName}`,
+        notNone(d.contactName) ? `• **Contact:** ${d.contactName}` : undefined,
+        d.typeName ? `• **Type:** ${d.typeName}` : undefined,
+        notNone(d.assignedToName) ? `• **Assigned To:** ${d.assignedToName}` : undefined,
+        notNone(d.categoryName) ? `• **Category:** ${d.categoryName}` : undefined,
+        notNone(d.priorityName) ? `• **Priority:** ${d.priorityName}` : undefined,
+        `• **Summary:** ${d.summary}`,
+        `• **Link:** ${ticket.url}`,
+      ]
+        .filter(Boolean)
+        .join('\n');
+
+      // Post to the Ticket channel if configured (proactive channel message).
+      let postedToChannel = false;
+      if (this.opts.ticketChannelId) {
+        try {
+          await TeamsInfo.sendMessageToTeamsChannel(
+            context,
+            MessageFactory.text(summaryText) as Activity,
+            this.opts.ticketChannelId,
+            this.opts.botAppId,
+          );
+          postedToChannel = true;
+        } catch (e) {
+          const m = e instanceof Error ? e.message : String(e);
+          await context.sendActivity(
+            `⚠️ Ticket created, but I couldn't post it to the Ticket channel: ${m}`,
+          );
+        }
+      }
+
       await context.sendActivity(
-        [
-          `✅ **Ticket #${ticket.id} created**`,
-          `• **Client:** ${d.clientName}`,
-          d.typeName ? `• **Type:** ${d.typeName}` : undefined,
-          `• **Summary:** ${d.summary}`,
-          `• **Link:** ${ticket.url}`,
-        ]
-          .filter(Boolean)
-          .join('\n'),
+        postedToChannel ? `${summaryText}\n\n_(Also posted to the Ticket channel.)_` : summaryText,
       );
     } catch (err) {
       if (err instanceof ClientResolutionError) {

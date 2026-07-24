@@ -32,7 +32,10 @@ adapter.onTurnError = async (context, error) => {
 // restart — an in-progress flow would just be restarted with `add_ticket`.
 const conversationState = new ConversationState(new MemoryStorage());
 const apiClient = new DesktopApiClient(config.api);
-const bot = new TicketBot(apiClient, conversationState);
+const bot = new TicketBot(apiClient, conversationState, {
+  ticketChannelId: config.bot.ticketChannelId,
+  botAppId: config.bot.appId,
+});
 
 // ─── HTTP server ─────────────────────────────────────────────────────────
 const app = express();

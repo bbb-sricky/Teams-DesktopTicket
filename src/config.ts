@@ -24,6 +24,8 @@ export interface AppConfig {
     appPassword: string;
     appType: string;
     appTenantId?: string;
+    /** Teams channel id to post created-ticket confirmations to (optional). */
+    ticketChannelId?: string;
   };
   api: {
     /** Full URL of the Desktop app's CreateTicket endpoint. */
@@ -56,6 +58,7 @@ export function loadConfig(): AppConfig {
       appPassword: optional('MICROSOFT_APP_PASSWORD') ?? '',
       appType: optional('MICROSOFT_APP_TYPE') ?? 'MultiTenant',
       appTenantId: optional('MICROSOFT_APP_TENANT_ID'),
+      ticketChannelId: optional('TICKET_CHANNEL_ID'),
     },
     api: {
       url: optional('DESKTOP_TICKET_API_URL'),
